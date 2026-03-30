@@ -49,15 +49,14 @@ CONFIG = {
     "normal_class_value": 0,  # 0 = Benign after label encoding
 
     # ── Autoencoder settings ───────────────────────────────────────────────
-    "ae_encoding_dim": 16,  # increased from 8 - less aggressive compression
-    "ae_epochs": 150,  # increased from 50 - loss was still falling
+    "ae_encoding_dim": 16,
+    "ae_epochs": 300,
     "ae_batch_size": 256,
     "ae_learning_rate": 0.001,
 
     # ── Isolation Forest settings ──────────────────────────────────────────
     "if_n_estimators": 100,
-    "if_contamination": 0.1,  # reduced from 0.4 - was causing too many false alarms
-
+    "if_contamination": 0.001,
     # ── Output ─────────────────────────────────────────────────────────────
     "save_models": True
 }
@@ -133,7 +132,7 @@ def load_and_prepare_data(config):
 class Autoencoder(nn.Module):
     """
     Symmetric autoencoder with gradual compression.
-    78 → 64 → 32 → 16 (bottleneck) → 32 → 64 → 78
+    78 → 128 → 64 → 32 → 16 (bottleneck) → 32 → 64 → 128 → 78
 
     More gradual compression than 78→32→16→8 gives the encoder
     a better chance to learn meaningful representations.
@@ -145,14 +144,16 @@ class Autoencoder(nn.Module):
         super(Autoencoder, self).__init__()
 
         self.encoder = nn.Sequential(
-            nn.Linear(n_features, 64), nn.ReLU(),
+            nn.Linear(n_features, 128), nn.ReLU(), nn.BatchNorm1d(128),
+            nn.Linear(128, 64), nn.ReLU(),
             nn.Linear(64, 32), nn.ReLU(),
             nn.Linear(32, encoding_dim)
         )
         self.decoder = nn.Sequential(
             nn.Linear(encoding_dim, 32), nn.ReLU(),
-            nn.Linear(32, 64), nn.ReLU(),
-            nn.Linear(64, n_features)
+            nn.Linear(32, 64), nn.ReLU(), nn.BatchNorm1d(64),
+            nn.Linear(64, 128), nn.ReLU(), nn.BatchNorm1d(128),
+            nn.Linear(128, n_features)
         )
 
     def forward(self, x):
@@ -262,7 +263,7 @@ def normalize_scores(scores):
     return (scores - mn) / (mx - mn)
 
 
-def compute_agent1_scores(ae_scores, if_scores, ae_weight=0.5, if_weight=0.5):
+def compute_agent1_scores(ae_scores, if_scores, ae_weight=1.0, if_weight=0.0):
     ae_norm = normalize_scores(ae_scores)
     if_norm = normalize_scores(if_scores)
     combined = (ae_weight * ae_norm) + (if_weight * if_norm)
@@ -271,12 +272,12 @@ def compute_agent1_scores(ae_scores, if_scores, ae_weight=0.5, if_weight=0.5):
 
 def select_combined_threshold(combined_scores, y_true):
     best_t, best_f1 = 0.5, 0.0
-    for t in np.linspace(0.1, 0.9, 100):
+    for t in np.linspace(0.001, 0.5, 200):
         preds = (combined_scores > t).astype(int)
         f1 = f1_score(y_true, preds, zero_division=0)
         if f1 > best_f1:
             best_f1, best_t = f1, t
-    print(f"\nBest combined threshold: {best_t:.3f}  (F1 = {best_f1:.4f})")
+    print(f"\nBest combined threshold: {best_t:.4f}  (F1 = {best_f1:.4f})")
     return best_t
 
 

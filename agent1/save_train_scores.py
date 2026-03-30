@@ -30,17 +30,30 @@ ENCODING_DIM = 16  # must match what agent1.py used
 # ── Autoencoder definition - must match agent1.py exactly ────────────────────
 
 class Autoencoder(nn.Module):
+    """
+    Symmetric autoencoder with gradual compression.
+    78 → 128 → 64 → 32 → 16 (bottleneck) → 32 → 64 → 128 → 78
+
+    More gradual compression than 78→32→16→8 gives the encoder
+    a better chance to learn meaningful representations.
+    Normal traffic reconstructs well (low error).
+    Attack traffic does not (high error = anomaly signal).
+    """
+
     def __init__(self, n_features, encoding_dim=16):
         super(Autoencoder, self).__init__()
+
         self.encoder = nn.Sequential(
-            nn.Linear(n_features, 64), nn.ReLU(),
+            nn.Linear(n_features, 128), nn.ReLU(), nn.BatchNorm1d(128),
+            nn.Linear(128, 64), nn.ReLU(),
             nn.Linear(64, 32), nn.ReLU(),
             nn.Linear(32, encoding_dim)
         )
         self.decoder = nn.Sequential(
             nn.Linear(encoding_dim, 32), nn.ReLU(),
-            nn.Linear(32, 64), nn.ReLU(),
-            nn.Linear(64, n_features)
+            nn.Linear(32, 64), nn.ReLU(), nn.BatchNorm1d(64),
+            nn.Linear(64, 128), nn.ReLU(), nn.BatchNorm1d(128),
+            nn.Linear(128, n_features)
         )
 
     def forward(self, x):
@@ -81,7 +94,7 @@ y_raw = df[LABEL_COL].values
 # Apply same scaling + clipping as agent1.py
 scaler = joblib.load(SCALER_PATH)
 X_scaled = scaler.transform(X)
-X_scaled = np.clip(X_scaled, -10, 10)
+X_scaled = np.clip(X_scaled, -10, -10)
 
 # Get full training set with all classes
 X_train_all = X_scaled[train_idx]
@@ -120,9 +133,7 @@ train_scores_df.to_csv(OUTPUT_PATH, index=False)
 print(f"Training scores saved → {OUTPUT_PATH}")
 
 # Quick sanity check - mean score per class
-import joblib as jl
-
-le = jl.load("../data/processed/label_encoder.pkl")
+le = joblib.load("../data/processed/label_encoder.pkl")
 train_scores_df["class_name"] = le.inverse_transform(y_train_multiclass)
 print("\nMean combined score per class (training set):")
 print(train_scores_df.groupby("class_name")["agent1_combined_score"]
