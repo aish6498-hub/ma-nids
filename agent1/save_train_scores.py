@@ -94,7 +94,7 @@ y_raw = df[LABEL_COL].values
 # Apply same scaling + clipping as agent1.py
 scaler = joblib.load(SCALER_PATH)
 X_scaled = scaler.transform(X)
-X_scaled = np.clip(X_scaled, -10, -10)
+X_scaled = np.clip(X_scaled, -10, 10)
 
 # Get full training set with all classes
 X_train_all = X_scaled[train_idx]
@@ -120,7 +120,7 @@ if_scores = get_isolation_forest_scores(iso_forest, X_train_all)
 
 ae_norm = normalize_scores(ae_scores)
 if_norm = normalize_scores(if_scores)
-combined = (0.5 * ae_norm) + (0.5 * if_norm)
+combined = (1.0 * ae_norm) + (0.0 * if_norm)
 
 # Save with multiclass labels - Agent 3 fits one Gaussian per class
 train_scores_df = pd.DataFrame({
