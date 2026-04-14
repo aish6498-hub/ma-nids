@@ -1,25 +1,29 @@
 """
-Agent 2 - Hyperparameter tuning script - run once to find best parameters.
-Finds the best settings for Random Forest and XGBoost
-using Grid Search with 3-fold Cross Validation.
-Best parameters found:
-  Random Forest: max_depth=20, min_samples_leaf=1, n_estimators=300
-  XGBoost: learning_rate=0.05, max_depth=9, n_estimators=300, subsample=0.8
-These are now hardcoded in agent2/train.py.
-This script does not need to be rerun.
+Agent 2 - Hyperparameter Tuning (offline, run once)
+
+Finds optimal hyperparameters for Random Forest and XGBoost using Grid Search with 3-fold Cross Validation,
+optimising for macro F1 to ensure balanced performance across all 8 traffic classes.
+
+Best parameters found and hardcoded into agent2/train.py:
+  Random Forest : max_depth=20, min_samples_leaf=1, n_estimators=300
+  XGBoost       : learning_rate=0.05, max_depth=9, n_estimators=300, subsample=0.8
+
+This script does not need to be rerun - it is preserved for reproducibility so the tuning decisions
+can be inspected and verified.
 """
 
 import time
+
 import joblib
-import pandas as pd
 import numpy as np
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split, GridSearchCV
 from sklearn.metrics import (classification_report, accuracy_score,
                              f1_score, confusion_matrix)
+from sklearn.model_selection import GridSearchCV
 from xgboost import XGBClassifier
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# Configuration
 
 DATA_PATH = "../data/processed/cleaned_data.csv"
 ENCODER_PATH = "../data/processed/label_encoder.pkl"
@@ -27,7 +31,7 @@ OUTPUT_DIR = "../data/processed/"
 LABEL_COL = "Label"
 SEED = 42
 
-# ── Load Data ─────────────────────────────────────────────────────────────────
+# Load Data
 
 print("Loading data...")
 df = pd.read_csv(DATA_PATH)
@@ -44,47 +48,47 @@ X_test, y_test = X.iloc[test_idx], y.iloc[test_idx]
 
 print(f"Train: {len(X_train):,}  Test: {len(X_test):,}")
 
-# ── Parameter Grids ───────────────────────────────────────────────────────────
+# Parameter Grids
 
 # Each key is a parameter name, each value is a list of options to try
-# Grid search tests every combination - so 3x3x2 = 18 combinations per model
-# With 3-fold CV that's 18x3 = 54 fits per model
+# Grid search tests every combination:
+#   Random Forest : 3 (n_estimators) × 3 (max_depth) × 2 (min_samples_leaf) = 18 combinations
+#   XGBoost       : 3 (n_estimators) × 3 (max_depth) × 2 (learning_rate) × 1 (subsample) = 18 combinations
+# With 3-fold CV: 18 × 3 = 54 training runs per model
 
 rf_grid = {
-    "n_estimators": [100, 200, 300],  # more trees = more stable
-    "max_depth": [10, 20, None],  # None = unlimited (current default)
-    "min_samples_leaf": [1, 4]  # higher = less overfitting
+    "n_estimators": [100, 200, 300],
+    "max_depth": [10, 20, None],
+    "min_samples_leaf": [1, 4]
 }
 
 xgb_grid = {
     "n_estimators": [100, 200, 300],
-    "max_depth": [3, 6, 9],  # XGBoost default is 6
-    "learning_rate": [0.05, 0.1],  # how much each tree corrects errors
-    "subsample": [0.8]  # fraction of data each tree sees
+    "max_depth": [3, 6, 9],
+    "learning_rate": [0.05, 0.1],
+    "subsample": [0.8]
 }
 
 
-# ── Tuning Function ───────────────────────────────────────────────────────────
+# Tuning Function
 
-def tune_and_evaluate(name, base_model, param_grid, X_train, X_test,
-                      y_train, y_test, le):
+def tune_and_evaluate(name, base_model, param_grid, X_train, X_test, y_train, y_test, le):
     print(f"\n{'=' * 55}")
     print(f"  Tuning: {name}")
     print('=' * 55)
 
     # GridSearchCV tests every parameter combination
-    # cv=3 means 3-fold cross validation - faster than 5-fold
+    # cv=3 means 3-fold cross validation
     # scoring='f1_macro' optimises for balanced performance across all classes
-    # refit=True means it automatically retrains on full training data
-    # using the best parameters found
+    # refit=True means it automatically retrains on full training data using the best parameters found
     search = GridSearchCV(
         estimator=base_model,
         param_grid=param_grid,
         cv=3,
         scoring="f1_macro",
-        n_jobs=-1,  # parallelise across all CPU cores
+        n_jobs=-1,
         refit=True,
-        verbose=1  # prints progress so you know it's working
+        verbose=1
     )
 
     t_start = time.time()
@@ -127,7 +131,7 @@ def tune_and_evaluate(name, base_model, param_grid, X_train, X_test,
     }
 
 
-# ── Run Tuning ────────────────────────────────────────────────────────────────
+# Run Tuning
 
 results = {}
 
@@ -146,7 +150,7 @@ results["XGBoost"] = tune_and_evaluate(
     X_train, X_test, y_train, y_test, le
 )
 
-# ── Comparison Table ──────────────────────────────────────────────────────────
+# Comparison Table
 
 print(f"\n{'=' * 55}")
 print("  TUNED MODEL COMPARISON")
