@@ -1,7 +1,5 @@
 """
 Agent 3 - Bayesian Fusion
-Multi-Agent Network Intrusion Detection System (MA-NIDS)
-CS 5100: Foundations of Artificial Intelligence
 
 Combines Agent 1 (anomaly score) and Agent 2 (class probabilities)
 using Bayes' Theorem to produce a calibrated posterior threat probability.
@@ -9,32 +7,41 @@ using Bayes' Theorem to produce a calibrated posterior threat probability.
 How Bayesian Fusion Works:
     posterior(class) ∝ prior(class) × likelihood(agent1_score | class)
 
-    - prior(class)                  = Agent 2's class probability
-    - likelihood(score | class)     = probability of this Agent 1 score
-                                      given the record belongs to this class
-                                      estimated as a Gaussian fitted on
-                                      training data per class
-    - posterior(class)              = updated belief after combining both
-    - threat_score                  = 1 - posterior(Benign)
+    - prior(class)              = Agent 2's class probability
+    - likelihood(score | class) = probability of this Agent 1 score given the record belongs to this class,
+                                  estimated as a Gaussian fitted on training data per class
+    - posterior(class)          = updated belief after combining both
+    - threat_score              = 1 - posterior(Benign)
+
+Known limitation:
+    In practice, the improved autoencoder produces anomaly scores that are
+    uniformly low across all classes (means between 0.0005 and 0.0065).
+    All per-class Gaussians hit the minimum std floor of 0.05, making
+    their likelihood values nearly identical for any given score.
+    When likelihoods are identical across classes, the posterior cannot
+    move away from Agent 2's prior - fusion is mathematically inert.
+    See agent3/stacking.py for the approach that does produce improvement.
 
 Outputs:
-    - Per-record predicted class and threat score
-    - Full evaluation comparing Agent 2 alone vs Agent 3 fusion
-    - Saves results for further analysis
+    - agent3_results.csv      : per-record predictions, threat scores, and full posterior distributions
+    - agent3_comparison.csv   : Agent 2 alone vs Agent 3 metrics summary
+    - cm_agent2.png           : Agent 2 confusion matrix
+    - cm_agent3.png           : Agent 3 confusion matrix
+    - threat_score_distribution.png : Benign vs attack threat score separation
 """
 
 import os
-import numpy as np
-import pandas as pd
+
 import joblib
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
-
 from scipy.stats import norm
 from sklearn.metrics import (classification_report, confusion_matrix,
-                             accuracy_score, f1_score, roc_auc_score)
+                             accuracy_score, f1_score)
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# Configuration
 
 AGENT1_TEST_SCORES = "../data/processed/agent1_outputs/agent1_scores.csv"
 AGENT1_TRAIN_SCORES = "../data/processed/agent1_outputs/agent1_train_scores.csv"
@@ -93,9 +100,8 @@ true_labels = a2_test["true_label"].values
 # of all training records belonging to that class.
 #
 # This gives us P(agent1_score | class) - the likelihood.
-# At inference: a new record with agent1_score=0.8 is very likely to be
-# a class whose training records had high scores, and unlikely to be
-# a class whose training records had low scores.
+# At inference: a new record with agent1_score=0.8 is very likely to be a class whose training records had high scores,
+# and unlikely to be a class whose training records had low scores.
 # =============================================================================
 
 print("\n" + "=" * 60)
@@ -117,10 +123,8 @@ for class_idx, class_name in enumerate(class_names):
         continue
 
     mu = class_scores.mean()
-    # Minimum std floor of 0.05 prevents likelihood collapse
-    # for classes where Agent 1 scores have very low variance
-    # (e.g. FTP-BruteForce and SlowHTTPTest both had std ~0.0004
-    # which caused their posteriors to collapse to zero)
+    # Minimum std floor of 0.05 prevents likelihood collapse for classes where Agent 1 scores have very low variance
+    # (e.g. FTP-BruteForce and SlowHTTPTest both had std ~0.0004 which caused their posteriors to collapse to zero)
     sigma = max(class_scores.std(), 0.05) + 1e-6
 
     likelihoods[class_idx] = {"mean": mu, "std": sigma}
@@ -220,12 +224,10 @@ def evaluate(name, y_true, y_pred, class_names):
 
 # Agent 2 alone
 a2_preds = a2_test["predicted"].values
-results_a2 = evaluate("Agent 2 - Random Forest alone",
-                      true_labels, a2_preds, class_names)
+results_a2 = evaluate("Agent 2 - Random Forest alone", true_labels, a2_preds, class_names)
 
 # Agent 3 - Bayesian fusion
-results_a3 = evaluate("Agent 3 - Bayesian Fusion (A1 + A2)",
-                      true_labels, predicted_class, class_names)
+results_a3 = evaluate("Agent 3 - Bayesian Fusion (A1 + A2)", true_labels, predicted_class, class_names)
 
 # Summary comparison table
 print("\n" + "=" * 60)

@@ -1,36 +1,38 @@
 """
 Agent 1 - Unsupervised Anomaly Detector
-Multi-Agent Network Intrusion Detection System (MA-NIDS)
-CS 5100: Foundations of Artificial Intelligence
 
-Detects anomalous network traffic using two unsupervised methods:
-  1. Autoencoder     - learns to reconstruct normal traffic;
-                       high reconstruction error signals an anomaly
-  2. Isolation Forest - isolates outliers using random splits;
-                       short isolation path signals an anomaly
+Detects anomalous network traffic using an autoencoder trained exclusively on normal (Benign) traffic.
+High reconstruction error signals an anomaly - traffic the autoencoder cannot reconstruct
+well is likely outside the normal distribution.
+
+An Isolation Forest is also trained and scored for research purposes, but contributes 0.0 weight to the combined score.
+The autoencoder alone produces better class separation on this dataset.
 
 Both models train ONLY on normal (Benign) traffic.
-Uses shared train/test indices from preprocessing so Agent 3
-can align Agent 1 and Agent 2 outputs row by row.
-Output: agent1_scores.csv - loaded by Agent 3 for Bayesian fusion.
-"""
+Uses shared train/test indices from preprocessing so Agent 3 can align Agent 1 and Agent 2 outputs row by row.
 
+Outputs:
+    - agent1_scores.csv       : anomaly scores for all test records (loaded by Agent 3 for fusion)
+    - agent1_train_scores.csv : computed by save_train_scores.py (used by Agent 3 Bayesian likelihood estimation)
+    - autoencoder.pt          : trained autoencoder weights
+    - isolation_forest.pkl    : trained IF model
+    - agent1_scaler.pkl       : fitted RobustScaler
+"""
 import os
-import numpy as np
-import pandas as pd
+
 import joblib
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 import seaborn as sns
-
-from sklearn.preprocessing import RobustScaler
+import torch
+import torch.nn as nn
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import (
     classification_report, confusion_matrix,
-    roc_auc_score, f1_score
+    roc_auc_score
 )
-
-import torch
-import torch.nn as nn
+from sklearn.preprocessing import RobustScaler
 from torch.utils.data import DataLoader, TensorDataset
 
 # =============================================================================
@@ -38,28 +40,32 @@ from torch.utils.data import DataLoader, TensorDataset
 # =============================================================================
 
 CONFIG = {
-    # ── Paths ──────────────────────────────────────────────────────────────
+    # Paths
     "data_path": "../data/processed/cleaned_data.csv",
     "train_idx_path": "../data/processed/train_idx.npy",
     "test_idx_path": "../data/processed/test_idx.npy",
     "output_dir": "../data/processed/agent1_outputs",
 
-    # ── Label settings ─────────────────────────────────────────────────────
+    # Label settings
     "label_column": "Label",
     "normal_class_value": 0,  # 0 = Benign after label encoding
 
-    # ── Autoencoder settings ───────────────────────────────────────────────
+    # Autoencoder settings
     "ae_encoding_dim": 16,
     "ae_epochs": 300,
     "ae_batch_size": 256,
     "ae_learning_rate": 0.001,
 
-    # ── Isolation Forest settings ──────────────────────────────────────────
+    # Isolation Forest settings
     "if_n_estimators": 100,
     "if_contamination": 0.001,
-    # ── Output ─────────────────────────────────────────────────────────────
+
+    # Output
     "save_models": True
 }
+
+torch.manual_seed(42)
+np.random.seed(42)
 
 
 # =============================================================================
@@ -96,9 +102,8 @@ def load_and_prepare_data(config):
     X_scaled = scaler.transform(X)
 
     # CRITICAL: clip BEFORE slicing into train/test
-    # Some features (Idle Min/Max, Active Min/Max) have extreme outlier values
-    # even after RobustScaling. Clipping to [-10, 10] keeps MSE loss manageable
-    # so the autoencoder can actually learn.
+    # Some features (Idle Min/Max, Active Min/Max) have extreme outlier values even after RobustScaling.
+    # Clipping to [-10, 10] keeps MSE loss manageable so the autoencoder can actually learn.
     X_scaled = np.clip(X_scaled, -10, 10)
 
     print(f"After scaling + clipping to [-10, 10]:")
@@ -134,8 +139,7 @@ class Autoencoder(nn.Module):
     Symmetric autoencoder with gradual compression.
     78 → 128 → 64 → 32 → 16 (bottleneck) → 32 → 64 → 128 → 78
 
-    More gradual compression than 78→32→16→8 gives the encoder
-    a better chance to learn meaningful representations.
+    More gradual compression than 78→32→16→8 gives the encoder a better chance to learn meaningful representations.
     Normal traffic reconstructs well (low error).
     Attack traffic does not (high error = anomaly signal).
     """
@@ -270,17 +274,6 @@ def compute_agent1_scores(ae_scores, if_scores, ae_weight=1.0, if_weight=0.0):
     return combined, ae_norm, if_norm
 
 
-def select_combined_threshold(combined_scores, y_true):
-    best_t, best_f1 = 0.5, 0.0
-    for t in np.linspace(0.001, 0.5, 200):
-        preds = (combined_scores > t).astype(int)
-        f1 = f1_score(y_true, preds, zero_division=0)
-        if f1 > best_f1:
-            best_f1, best_t = f1, t
-    print(f"\nBest combined threshold: {best_t:.4f}  (F1 = {best_f1:.4f})")
-    return best_t
-
-
 def predict_from_scores(combined_scores, threshold=0.5):
     return (combined_scores > threshold).astype(int)
 
@@ -392,12 +385,21 @@ def run_agent1(config=CONFIG):
     if_scores_test = get_isolation_forest_scores(iso_forest, X_test)
 
     # Step 3 - Combine scores
+    # IF weight is intentionally 0.0 - the autoencoder alone produces better separation on this dataset.
+    # IF is retained for scoring/saving purposes so its signal is available for future experimentation,
+    # but does not contribute to the combined score used by Agent 3.
     combined_scores, ae_norm, if_norm = compute_agent1_scores(
         ae_scores_test, if_scores_test
     )
 
-    # Step 4 - Threshold and predict
-    best_threshold = select_combined_threshold(combined_scores, y_test)
+    # Step 4 - Threshold and predict - Select threshold on TRAINING data, predict on test
+    ae_scores_train = get_autoencoder_scores(ae_model, X_train_normal)
+    if_scores_train = get_isolation_forest_scores(iso_forest, X_train_normal)
+    combined_train, _, _ = compute_agent1_scores(ae_scores_train, if_scores_train)
+
+    best_threshold = np.percentile(combined_train, 95)
+    print(f"\nBest combined threshold (p95 of training scores): {best_threshold:.4f}")
+
     y_pred = predict_from_scores(combined_scores, best_threshold)
 
     # Step 5 - Evaluate
@@ -406,8 +408,7 @@ def run_agent1(config=CONFIG):
     # Step 6 - Plots
     print("\nSaving plots...")
     plot_training_loss(loss_history, config["output_dir"])
-    plot_score_distributions(ae_norm, if_norm, combined_scores,
-                             y_test, config["output_dir"])
+    plot_score_distributions(ae_norm, if_norm, combined_scores, y_test, config["output_dir"])
     plot_confusion_matrix(y_test, y_pred, config["output_dir"])
     print("Plots saved.")
 

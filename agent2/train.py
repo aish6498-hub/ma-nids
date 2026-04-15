@@ -1,24 +1,41 @@
 """
-Agent 2 - Training Script
-Trains Random Forest and XGBoost on cleaned CIC-IDS2018 data.
-Uses shared train/test indices from preprocessing so Agent 3
-can align Agent 1 and Agent 2 outputs row by row.
-Saves models, predictions, and probabilities for Agent 3.
+Agent 2 - Supervised Classifier
+
+Trains two supervised classifiers on labeled network traffic data:
+  1. Random Forest  - ensemble of decision trees, selected as primary Agent 2 model
+  2. XGBoost        - gradient boosted trees, trained as second base model for stacking
+
+Both classifiers learn to distinguish between 8 traffic classes:
+  Benign, DDOS-HOIC, DoS-GoldenEye, DoS-Hulk, DoS-SlowHTTPTest, FTP-BruteForce, Infilteration, SSH-BruteForce
+
+Design decisions:
+  - Uses shared train/test indices from preprocessing (train_idx.npy / test_idx.npy)
+    so all three agents evaluate on identical test records - required for Agent 3 to join outputs row by row
+  - Saves per-class probabilities (not just predicted labels) because Agent 3
+    needs soft probability vectors, not hard decisions, for both Bayesian fusion and stacking meta-learning
+  - Hyperparameters are tuned values from agent2/tune.py (grid search, 3-fold CV)
+
+Outputs:
+  - agent2_Random_Forest.pkl                    : trained RF model
+  - agent2_XGBoost.pkl                          : trained XGBoost model
+  - agent2_Random_Forest_test_predictions.csv   : RF predictions + probabilities
+  - agent2_XGBoost_test_predictions.csv         : XGBoost predictions + probabilities
+  - agent2_comparison.csv                       : side-by-side metrics summary
 """
 
 import time
+
 import joblib
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
 import seaborn as sns
-
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import (classification_report, confusion_matrix,
                              accuracy_score, f1_score)
 from xgboost import XGBClassifier
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# Configuration
 
 DATA_PATH = "../data/processed/cleaned_data.csv"
 ENCODER_PATH = "../data/processed/label_encoder.pkl"
@@ -28,7 +45,7 @@ OUTPUT_DIR = "../data/processed"
 LABEL_COL = "Label"
 SEED = 42
 
-# ── Load Data ─────────────────────────────────────────────────────────────────
+# Load Data
 
 print("Loading data...")
 df = pd.read_csv(DATA_PATH)
@@ -37,7 +54,8 @@ le = joblib.load(ENCODER_PATH)
 X = df.drop(columns=[LABEL_COL])
 y = df[LABEL_COL]
 
-# Load shared indices - same split used by Agent 1
+# Load shared indices - same split used by all agents.
+# Critical: ensures Agent 3 can join Agent 1 and Agent 2 outputs row by row.
 train_idx = np.load(TRAIN_IDX)
 test_idx = np.load(TEST_IDX)
 
@@ -49,7 +67,7 @@ print(f"Train    : {len(X_train):,}")
 print(f"Test     : {len(X_test):,}")
 print(f"Classes  : {list(le.classes_)}")
 
-# ── Define Models ─────────────────────────────────────────────────────────────
+# Define Models
 
 models = {
     "Random_Forest": RandomForestClassifier(
@@ -71,7 +89,7 @@ models = {
     )
 }
 
-# ── Train, Evaluate, Save ─────────────────────────────────────────────────────
+# Train, Evaluate, Save
 
 results = {}
 
@@ -89,7 +107,7 @@ for name, model in models.items():
     # Predict labels and probabilities
     t_start = time.time()
     y_pred = model.predict(X_test)
-    y_pred_proba = model.predict_proba(X_test)  # shape (n_samples, n_classes)
+    y_pred_proba = model.predict_proba(X_test)
     predict_time = time.time() - t_start
     print(f"Prediction time: {predict_time:.2f}s")
 
@@ -128,11 +146,11 @@ for name, model in models.items():
     joblib.dump(model, model_path)
     print(f"Model saved → {model_path}")
 
-    # ── Save test predictions and probabilities for Agent 3 ──────────────
+    # Save test predictions and probabilities for Agent 3
     # Agent 3 needs:
-    #   - y_pred        : predicted class label (integer)
-    #   - probabilities : one column per class (Agent 3 uses these for fusion)
-    #   - true label    : for evaluation
+    #   - true_label    : ground truth for evaluation
+    #   - predicted     : argmax class label (used by Bayesian fusion)
+    #   - prob_*        : one probability column per class (used as meta-features in stacking fusion)
     proba_cols = {f"prob_{cls}": y_pred_proba[:, i]
                   for i, cls in enumerate(le.classes_)}
     preds_df = pd.DataFrame({
@@ -154,7 +172,7 @@ for name, model in models.items():
         "Predict Time (s)": round(predict_time, 2)
     }
 
-# ── Comparison Table ──────────────────────────────────────────────────────────
+# Comparison Table
 
 print(f"\n{'=' * 55}")
 print("  FINAL COMPARISON")

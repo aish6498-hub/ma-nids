@@ -7,14 +7,14 @@ per-class likelihood distributions for Bayesian fusion.
 Run this AFTER agent1.py has completed successfully.
 """
 
+import joblib
 import numpy as np
 import pandas as pd
-import joblib
 import torch
-import torch.nn as nn
-from sklearn.preprocessing import RobustScaler
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
+from agent1 import Autoencoder, get_autoencoder_scores, get_isolation_forest_scores, normalize_scores, CONFIG
+
+# Paths
 
 DATA_PATH = "../data/processed/cleaned_data.csv"
 TRAIN_IDX_PATH = "../data/processed/train_idx.npy"
@@ -24,65 +24,9 @@ AE_PATH = "../data/processed/agent1_outputs/autoencoder.pt"
 OUTPUT_PATH = "../data/processed/agent1_outputs/agent1_train_scores.csv"
 
 LABEL_COL = "Label"
-ENCODING_DIM = 16  # must match what agent1.py used
+ENCODING_DIM = CONFIG["ae_encoding_dim"]
 
-
-# ── Autoencoder definition - must match agent1.py exactly ────────────────────
-
-class Autoencoder(nn.Module):
-    """
-    Symmetric autoencoder with gradual compression.
-    78 → 128 → 64 → 32 → 16 (bottleneck) → 32 → 64 → 128 → 78
-
-    More gradual compression than 78→32→16→8 gives the encoder
-    a better chance to learn meaningful representations.
-    Normal traffic reconstructs well (low error).
-    Attack traffic does not (high error = anomaly signal).
-    """
-
-    def __init__(self, n_features, encoding_dim=16):
-        super(Autoencoder, self).__init__()
-
-        self.encoder = nn.Sequential(
-            nn.Linear(n_features, 128), nn.ReLU(), nn.BatchNorm1d(128),
-            nn.Linear(128, 64), nn.ReLU(),
-            nn.Linear(64, 32), nn.ReLU(),
-            nn.Linear(32, encoding_dim)
-        )
-        self.decoder = nn.Sequential(
-            nn.Linear(encoding_dim, 32), nn.ReLU(),
-            nn.Linear(32, 64), nn.ReLU(), nn.BatchNorm1d(64),
-            nn.Linear(64, 128), nn.ReLU(), nn.BatchNorm1d(128),
-            nn.Linear(128, n_features)
-        )
-
-    def forward(self, x):
-        return self.decoder(self.encoder(x))
-
-
-# ── Helper functions ──────────────────────────────────────────────────────────
-
-def get_autoencoder_scores(model, X):
-    model.eval()
-    X_tensor = torch.tensor(X, dtype=torch.float32)
-    with torch.no_grad():
-        reconstructed = model(X_tensor)
-        errors = ((X_tensor - reconstructed) ** 2).mean(dim=1).numpy()
-    return errors
-
-
-def get_isolation_forest_scores(iso_forest, X):
-    return -iso_forest.score_samples(X)
-
-
-def normalize_scores(scores):
-    mn, mx = scores.min(), scores.max()
-    if mx == mn:
-        return np.zeros_like(scores)
-    return (scores - mn) / (mx - mn)
-
-
-# ── Main ──────────────────────────────────────────────────────────────────────
+# Main
 
 print("Loading data...")
 df = pd.read_csv(DATA_PATH)
@@ -94,7 +38,7 @@ y_raw = df[LABEL_COL].values
 # Apply same scaling + clipping as agent1.py
 scaler = joblib.load(SCALER_PATH)
 X_scaled = scaler.transform(X)
-X_scaled = np.clip(X_scaled, -10, -10)
+X_scaled = np.clip(X_scaled, -10, 10)
 
 # Get full training set with all classes
 X_train_all = X_scaled[train_idx]
@@ -109,7 +53,7 @@ iso_forest = joblib.load(IF_PATH)
 
 n_features = X_train_all.shape[1]
 ae_model = Autoencoder(n_features, ENCODING_DIM)
-ae_model.load_state_dict(torch.load(AE_PATH))
+ae_model.load_state_dict(torch.load(AE_PATH, weights_only=True))
 ae_model.eval()
 print("Models loaded.")
 
@@ -120,7 +64,7 @@ if_scores = get_isolation_forest_scores(iso_forest, X_train_all)
 
 ae_norm = normalize_scores(ae_scores)
 if_norm = normalize_scores(if_scores)
-combined = (0.5 * ae_norm) + (0.5 * if_norm)
+combined = (1.0 * ae_norm) + (0.0 * if_norm)
 
 # Save with multiclass labels - Agent 3 fits one Gaussian per class
 train_scores_df = pd.DataFrame({

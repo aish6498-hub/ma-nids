@@ -1,21 +1,36 @@
 """
-Preprocessing Script - MA-NIDS
-Loads raw CIC-IDS2018 CSVs, cleans them, balances classes,
-encodes labels, and saves a single clean CSV + label encoder.
-Also saves shared train/test indices so all agents evaluate
-on identical records.
-All agents load from this output - do not preprocess again.
+Preprocessing Script
+
+Loads raw CSE-CIC-IDS2018 CSV files, cleans and balances them, encodes labels,
+and produces a single unified dataset used by all three agents.
+
+Key decisions:
+  - Excludes 02-20-2018.csv (84 columns vs 80 in all others)
+  - Drops 5 rare/unreliable attack classes
+  - Caps each class at 40,000 samples for balance
+  - Drops classes with fewer than 10,000 samples after combining
+  - Saves shared train/test indices so all agents evaluate on
+    identical records - required for Agent 3 row-by-row alignment
+
+Outputs:
+  - cleaned_data.csv      : 320,000 rows, 79 columns (78 features + Label)
+  - label_encoder.pkl     : maps integer labels to class names
+  - train_idx.npy         : 256,000 shared training indices
+  - test_idx.npy          :  64,000 shared test indices
+
+Run once before any agent. Do not rerun - indices must stay fixed across all agents for alignment to hold.
 """
 
-import os
 import glob
+import os
+
+import joblib
 import numpy as np
 import pandas as pd
-import joblib
-from sklearn.preprocessing import LabelEncoder
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
 
-# ── Configuration ─────────────────────────────────────────────────────────────
+# Configuration
 
 INPUT_DIR = "../data/raw/ids-intrusion-csv"
 OUTPUT_DIR = "../data/processed"
@@ -23,21 +38,27 @@ SAMPLES = 40_000
 MIN_SAMPLES = 10_000
 LABEL_COL = "Label"
 SEED = 42
+# 02-20-2018.csv has 84 columns vs 80 in all other files due to a Src Port mismatch
+# Cannot be combined with the rest of the dataset
 exclude_file_name = "02-20"
 
+# Classes dropped for the following reasons:
+#   Brute Force -Web / XSS  : very few samples across all files, below MIN_SAMPLES threshold after balancing
+#   DDOS attack-LOIC-UDP    : inconsistent representation across files
+#   SQL Injection           : too few samples for meaningful learning
+#   DoS attacks-Slowloris   : merged/renamed in some files, unreliable labels
 DROP_CLASSES = [
     'Brute Force -Web',
     'Brute Force -XSS',
     'DDOS attack-LOIC-UDP',
     'SQL Injection',
-    'DoS attacks-Slowloris',
-    'Label'
+    'DoS attacks-Slowloris'
 ]
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 
-# ── Step 1: Load one CSV file ──────────────────────────────────────────────────
+# Step 1: Load one CSV file
 
 def load_file(path):
     df = pd.read_csv(path, low_memory=False)
@@ -47,7 +68,7 @@ def load_file(path):
     return df
 
 
-# ── Step 2: Clean one dataframe ───────────────────────────────────────────────
+# Step 2: Clean one dataframe
 
 def clean(df):
     df = df.dropna(subset=[LABEL_COL])
@@ -59,7 +80,7 @@ def clean(df):
     return df
 
 
-# ── Step 3: Sample up to N rows per class ─────────────────────────────────────
+# Step 3: Sample up to N rows per class
 
 def sample_per_class(df, n, seed):
     parts = []
@@ -68,7 +89,7 @@ def sample_per_class(df, n, seed):
     return pd.concat(parts, ignore_index=True)
 
 
-# ── Main Pipeline ─────────────────────────────────────────────────────────────
+# Main Pipeline
 
 csv_files = sorted(glob.glob(os.path.join(INPUT_DIR, "**", "*.csv"),
                              recursive=True))
@@ -114,7 +135,7 @@ print(combined[LABEL_COL].value_counts().sort_values())
 combined = combined.sample(frac=1, random_state=SEED).reset_index(drop=True)
 print(f"\nCombined shape: {combined.shape}")
 
-# ── Step 4: Encode labels ──────────────────────────────────────────────────────
+# Step 4: Encode labels
 
 le = LabelEncoder()
 combined[LABEL_COL] = le.fit_transform(combined[LABEL_COL])
@@ -123,12 +144,12 @@ print("\nLabel encoding map:")
 for i, cls in enumerate(le.classes_):
     print(f"  {i} → {cls}")
 
-# ── Step 5: Save outputs ───────────────────────────────────────────────────────
+# Step 5: Save outputs
 
 combined.to_csv(os.path.join(OUTPUT_DIR, "cleaned_data.csv"), index=False)
 joblib.dump(le, os.path.join(OUTPUT_DIR, "label_encoder.pkl"))
 
-# ── Step 6: Save shared train/test indices ────────────────────────────────────
+# Step 6: Save shared train/test indices
 # All agents load these indices to evaluate on identical records
 # This ensures Agent 3 can join Agent 1 and Agent 2 outputs row by row
 
