@@ -88,6 +88,7 @@ false alarm rate nearly in half.
 ---
 
 ## Results
+The final paper is included in the root directory of this repository under the filename MA-NIDS_Final_Paper.pdf.
 
 ### Full Comparison
 
