@@ -100,7 +100,7 @@ false alarm rate nearly in half.
 | Agent 2 + Threshold (0.63) | 85.77%     | 0.8544     | 16.15%           |
 
 Stacking reduces false alarms by **2.86 percentage points** over supervised classification alone - equivalent to
-approximately 229 fewer false alarms per 8,000 normal connections - while simultaneously improving F1 and accuracy.
+approximately 226 fewer false alarms per 8,000 normal connections - while simultaneously improving F1 and accuracy.
 
 ### Per-Class Performance
 
@@ -305,7 +305,7 @@ realistic benchmark.
 
 ## Future Work
 
-- LSTM autoencoder to capture temporal traffic patterns (would improve Agent 1 AUC-ROC beyond 0.8733)
+- LSTM autoencoder to capture temporal traffic patterns (would improve Agent 1 AUC-ROC beyond its current 0.8733)
 - Feature engineering to better separate Infilteration from Benign
 - Neural network meta-model for deeper stacking
 - Cross-dataset evaluation for generalisation testing
@@ -319,5 +319,5 @@ realistic benchmark.
   *PLoS ONE*, 19(9), e0308469. https://doi.org/10.1371/journal.pone.0308469
 - Soltani, M., et al. (2024). A multi-agent adaptive deep learning framework for online intrusion detection.
   *Cybersecurity*, 7(1), Article 9. https://doi.org/10.1186/s42400-023-00199-0
-- Ahmad, Z., et al. (2021). Network intrusion detection system: A systematic study of machine learning and deep learning
+- Ahmad, Z., et al. (2018). Network intrusion detection system: A systematic study of machine learning and deep learning
   approaches. *Transactions on Emerging Telecommunications Technologies*, 32(1), e4150.
